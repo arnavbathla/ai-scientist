@@ -1,0 +1,566 @@
+// ResearchOS — Prisma schema
+// All durable state for users, projects, runs, agent sessions, hypotheses,
+// evidence, debates, rankings, safety, source documents, and model/tool calls.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Enums
+// -----------------------------------------------------------------------------
+
+enum RunStatus {
+  queued
+  running
+  paused
+  completed
+  completed_with_limit
+  failed
+  cancelled
+  blocked
+}
+
+enum SessionStatus {
+  active
+  paused
+  completed
+  failed
+  cancelled
+  blocked
+}
+
+enum TaskStatus {
+  pending
+  running
+  blocked
+  completed
+  failed
+  cancelled
+}
+
+enum MemoryType {
+  objective
+  plan
+  progress
+  finding
+  source_summary
+  hypothesis_summary
+  critique_summary
+  decision
+  blocker
+  safety_note
+  final_summary
+}
+
+enum CheckpointType {
+  initialization
+  iteration
+  phase_transition
+  compaction
+  failure_recovery
+  completion
+  budget_limit
+  safety_block
+}
+
+enum EvalType {
+  source_quality
+  hypothesis_quality
+  evidence_grounding
+  novelty
+  safety
+  final_report_quality
+  end_to_end
+}
+
+enum SourceType {
+  pubmed
+  openalex
+  crossref
+  chembl
+  uniprot
+  alphafold
+  user_upload
+  web
+}
+
+enum HypothesisStatus {
+  generated
+  clustered
+  debated
+  evolved
+  selected
+  rejected
+}
+
+enum SupportType {
+  supports
+  contradicts
+  mixed
+  background
+  unsupported
+}
+
+enum SafetySeverity {
+  low
+  medium
+  high
+  blocked
+}
+
+enum SafetyCategory {
+  biosecurity
+  chemical_safety
+  clinical_safety
+  dual_use
+  unsupported_claim
+  ethics
+  other
+}
+
+// -----------------------------------------------------------------------------
+// Auth / Users / Projects
+// -----------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  projects Project[]
+  runs     ResearchRun[]
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String
+  description String?
+  domain      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runs ResearchRun[]
+
+  @@index([userId, createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// Research Runs and Agent Sessions
+// -----------------------------------------------------------------------------
+
+model ResearchRun {
+  id                  String    @id @default(cuid())
+  projectId           String
+  userId              String
+  status              RunStatus @default(queued)
+  researchGoal        String
+  normalizedGoal      String?
+  domain              String?
+  constraints         Json      @default("{}")
+  sourceConfig        Json      @default("{}")
+  modelConfig         Json      @default("{}")
+  safetySensitivity   String    @default("standard")
+  maxIterations       Int       @default(25)
+  maxRuntimeMinutes   Int       @default(180)
+  maxSources          Int       @default(100)
+  maxHypotheses       Int       @default(40)
+  maxModelCostUsd     Float?
+  completionConfidence Float?
+  error               String?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  sessions       AgentSession[]
+  tasks          AgentTask[]
+  memories       AgentMemory[]
+  checkpoints    AgentCheckpoint[]
+  events         AgentEvent[]
+  assessments    CompletionAssessment[]
+  evals          AgentEval[]
+  sourceDocs     SourceDocument[]
+  hypotheses     Hypothesis[]
+  evidence       Evidence[]
+  debates        DebateRound[]
+  rankings       Ranking[]
+  safetyFlags    SafetyFlag[]
+  finalReports   FinalReport[]
+  toolCalls      ToolCall[]
+  modelCalls     ModelCall[]
+
+  @@index([userId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([status])
+}
+
+model AgentSession {
+  id              String         @id @default(cuid())
+  runId           String
+  status          SessionStatus  @default(active)
+  currentPhase    String?
+  currentTaskId   String?
+  iterationCount  Int            @default(0)
+  maxIterations   Int            @default(25)
+  tokenBudgetUsed Int?
+  costBudgetUsed  Float?
+  startedAt       DateTime       @default(now())
+  lastHeartbeatAt DateTime       @default(now())
+  completedAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  run         ResearchRun            @relation(fields: [runId], references: [id], onDelete: Cascade)
+  tasks       AgentTask[]
+  memories    AgentMemory[]
+  checkpoints AgentCheckpoint[]
+  events      AgentEvent[]
+  assessments CompletionAssessment[]
+  evals       AgentEval[]
+  debates     DebateRound[]
+  toolCalls   ToolCall[]
+  modelCalls  ModelCall[]
+
+  @@index([runId, createdAt])
+  @@index([status, lastHeartbeatAt])
+}
+
+model AgentTask {
+  id                  String     @id @default(cuid())
+  sessionId           String
+  runId               String
+  parentTaskId        String?
+  title               String
+  description         String
+  agentName           String
+  status              TaskStatus @default(pending)
+  priority            Int        @default(0)
+  input               Json       @default("{}")
+  output              Json?
+  completionCriteria  Json       @default("{}")
+  verificationCriteria Json      @default("{}")
+  verificationResult  Json?
+  failureReason       String?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  run     ResearchRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  parent  AgentTask?   @relation("TaskParent", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  children AgentTask[] @relation("TaskParent")
+
+  events     AgentEvent[]
+  toolCalls  ToolCall[]
+  modelCalls ModelCall[]
+
+  @@index([sessionId, status])
+  @@index([runId, agentName])
+  @@index([runId, createdAt])
+}
+
+model AgentMemory {
+  id              String     @id @default(cuid())
+  sessionId       String
+  runId           String
+  memoryType      MemoryType
+  title           String
+  content         String     @db.Text
+  payload         Json?
+  importanceScore Float      @default(0.5)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  run     ResearchRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, memoryType, importanceScore])
+  @@index([sessionId, createdAt])
+}
+
+model AgentCheckpoint {
+  id             String         @id @default(cuid())
+  sessionId      String
+  runId          String
+  checkpointType CheckpointType
+  summary        String         @db.Text
+  state          Json
+  createdAt      DateTime       @default(now())
+
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  run     ResearchRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+  @@index([sessionId, checkpointType])
+}
+
+model AgentEvent {
+  id        String   @id @default(cuid())
+  runId     String
+  sessionId String?
+  taskId    String?
+  agentName String
+  eventType String
+  title     String
+  message   String   @db.Text
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  run     ResearchRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  session AgentSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  task    AgentTask?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([runId, createdAt])
+  @@index([sessionId, createdAt])
+}
+
+model CompletionAssessment {
+  id                    String   @id @default(cuid())
+  runId                 String
+  sessionId             String
+  isComplete            Boolean
+  confidenceScore       Float
+  missingWork           Json     @default("[]")
+  blockers              Json     @default("[]")
+  recommendedNextTasks  Json     @default("[]")
+  rationale             String   @db.Text
+  createdAt             DateTime @default(now())
+
+  run     ResearchRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+}
+
+model AgentEval {
+  id        String   @id @default(cuid())
+  runId     String
+  sessionId String
+  evalType  EvalType
+  score     Float
+  passed    Boolean
+  findings  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  run     ResearchRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([runId, evalType])
+}
+
+// -----------------------------------------------------------------------------
+// Scientific content
+// -----------------------------------------------------------------------------
+
+model SourceDocument {
+  id         String     @id @default(cuid())
+  runId      String
+  sourceType SourceType
+  title      String     @db.Text
+  authors    Json?
+  abstract   String?    @db.Text
+  url        String?
+  doi        String?
+  pmid       String?
+  year       Int?
+  raw        Json
+  createdAt  DateTime   @default(now())
+
+  run      ResearchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  evidence Evidence[]
+
+  @@index([runId, sourceType])
+  @@index([runId, createdAt])
+  @@index([doi])
+  @@index([pmid])
+}
+
+model Hypothesis {
+  id                       String           @id @default(cuid())
+  runId                    String
+  title                    String
+  summary                  String           @db.Text
+  mechanism                String           @db.Text
+  noveltyRationale         String           @db.Text
+  testability              String           @db.Text
+  proposedExperimentHighLevel String        @db.Text
+  riskLevel                String           @default("low")
+  confidenceScore          Float            @default(0.5)
+  noveltyScore             Float            @default(0.5)
+  feasibilityScore         Float            @default(0.5)
+  impactScore              Float            @default(0.5)
+  evidenceScore            Float            @default(0.5)
+  overallScore             Float            @default(0.5)
+  status                   HypothesisStatus @default(generated)
+  parentHypothesisIds      Json?
+  clusterId                String?
+  createdByAgent           String
+  createdAt                DateTime         @default(now())
+  updatedAt                DateTime         @updatedAt
+
+  run        ResearchRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  evidence   Evidence[]
+  rankings   Ranking[]
+  debatesA   DebateRound[] @relation("DebateA")
+  debatesB   DebateRound[] @relation("DebateB")
+  safetyFlags SafetyFlag[]
+
+  @@index([runId, status])
+  @@index([runId, overallScore])
+  @@index([clusterId])
+}
+
+model Evidence {
+  id              String      @id @default(cuid())
+  runId           String
+  hypothesisId    String
+  sourceDocumentId String?
+  claim           String      @db.Text
+  supportType     SupportType
+  quote           String?     @db.Text
+  explanation     String      @db.Text
+  confidence      Float       @default(0.5)
+  createdAt       DateTime    @default(now())
+
+  run        ResearchRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  hypothesis Hypothesis      @relation(fields: [hypothesisId], references: [id], onDelete: Cascade)
+  source     SourceDocument? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([runId, hypothesisId])
+  @@index([hypothesisId, supportType])
+}
+
+model DebateRound {
+  id                String   @id @default(cuid())
+  runId             String
+  sessionId         String
+  hypothesisAId     String
+  hypothesisBId     String
+  judgeAgent        String
+  argumentA         String   @db.Text
+  argumentB         String   @db.Text
+  verdict           String   @db.Text
+  winnerHypothesisId String?
+  scoreDeltaA       Float
+  scoreDeltaB       Float
+  createdAt         DateTime @default(now())
+
+  run     ResearchRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  hypA    Hypothesis   @relation("DebateA", fields: [hypothesisAId], references: [id], onDelete: Cascade)
+  hypB    Hypothesis   @relation("DebateB", fields: [hypothesisBId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+}
+
+model Ranking {
+  id            String   @id @default(cuid())
+  runId         String
+  hypothesisId  String
+  eloScore      Float    @default(1000)
+  rank          Int
+  rationale     String   @db.Text
+  createdAt     DateTime @default(now())
+
+  run        ResearchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  hypothesis Hypothesis  @relation(fields: [hypothesisId], references: [id], onDelete: Cascade)
+
+  @@index([runId, rank])
+  @@index([hypothesisId])
+}
+
+model SafetyFlag {
+  id           String         @id @default(cuid())
+  runId        String
+  hypothesisId String?
+  severity     SafetySeverity
+  category     SafetyCategory
+  message      String         @db.Text
+  createdAt    DateTime       @default(now())
+
+  run        ResearchRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  hypothesis Hypothesis?  @relation(fields: [hypothesisId], references: [id], onDelete: SetNull)
+
+  @@index([runId, severity])
+}
+
+model FinalReport {
+  id                       String   @id @default(cuid())
+  runId                    String
+  title                    String
+  executiveSummary         String   @db.Text
+  markdown                 String   @db.Text
+  json                     Json
+  completionCriteriaPassed Boolean  @default(false)
+  completionConfidence     Float    @default(0)
+  unresolvedGaps           Json?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  run ResearchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// Tool & model call audit logs
+// -----------------------------------------------------------------------------
+
+model ToolCall {
+  id        String   @id @default(cuid())
+  runId     String
+  sessionId String?
+  taskId    String?
+  agentName String
+  toolName  String
+  input     Json     @default("{}")
+  output    Json?
+  error     String?
+  latencyMs Int?
+  createdAt DateTime @default(now())
+
+  run     ResearchRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  session AgentSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  task    AgentTask?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([runId, createdAt])
+  @@index([runId, toolName])
+}
+
+model ModelCall {
+  id               String   @id @default(cuid())
+  runId            String
+  sessionId        String?
+  taskId           String?
+  agentName        String
+  provider         String
+  model            String
+  status           String
+  promptTokens     Int?
+  completionTokens Int?
+  latencyMs        Int?
+  error            String?
+  createdAt        DateTime @default(now())
+
+  run     ResearchRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  session AgentSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  task    AgentTask?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([runId, createdAt])
+  @@index([runId, provider, model])
+}

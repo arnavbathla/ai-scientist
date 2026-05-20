@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Force dark-first; declared again under .dark to be explicit. */
+    --background: 0 0% 4%;
+    --foreground: 0 0% 96%;
+
+    --card: 0 0% 6%;
+    --card-foreground: 0 0% 96%;
+
+    --popover: 0 0% 6%;
+    --popover-foreground: 0 0% 96%;
+
+    --primary: 262 60% 70%;
+    --primary-foreground: 0 0% 4%;
+
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 92%;
+
+    --muted: 0 0% 10%;
+    --muted-foreground: 0 0% 60%;
+
+    --accent: 0 0% 12%;
+    --accent-foreground: 0 0% 92%;
+
+    --destructive: 0 70% 55%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 0 0% 14%;
+    --input: 0 0% 14%;
+    --ring: 262 60% 70%;
+
+    --radius: 0.4rem;
+
+    --font-sans: var(--font-inter, ui-sans-serif);
+    --font-mono: var(--font-jetbrains, ui-monospace);
+  }
+}
+
+html,
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  height: 100%;
+  -webkit-font-smoothing: antialiased;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+/* Make scroll bars unobtrusive */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.mono {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.hairline {
+  border-color: hsl(var(--border));
+}
+
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px hsl(var(--ring) / 0.85);
+}
+
+/* Subtle pulse for live indicator */
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(1.25); }
+}
+.pulse-dot {
+  animation: pulseDot 1.6s ease-in-out infinite;
+}
+
+/* Prose styling for rendered markdown */
+.prose-os {
+  color: hsl(var(--foreground));
+}
+.prose-os h1 { font-size: 1.5rem; font-weight: 600; margin: 1.25rem 0 0.5rem; }
+.prose-os h2 { font-size: 1.25rem; font-weight: 600; margin: 1.1rem 0 0.5rem; }
+.prose-os h3 { font-size: 1.1rem; font-weight: 600; margin: 1rem 0 0.5rem; }
+.prose-os p { margin: 0.5rem 0; line-height: 1.6; color: hsl(var(--foreground) / 0.92); }
+.prose-os ul { margin: 0.5rem 0 0.5rem 1.25rem; list-style: disc; }
+.prose-os ol { margin: 0.5rem 0 0.5rem 1.25rem; list-style: decimal; }
+.prose-os li { margin: 0.2rem 0; }
+.prose-os code { font-family: var(--font-mono); background: hsl(var(--muted)); padding: 0 0.25rem; border-radius: 3px; font-size: 0.85em; }
+.prose-os pre { background: hsl(var(--muted)); padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-family: var(--font-mono); font-size: 0.85em; }
+.prose-os a { color: hsl(var(--primary)); text-decoration: underline; text-underline-offset: 2px; }
+.prose-os blockquote { border-left: 2px solid hsl(var(--border)); padding-left: 0.75rem; color: hsl(var(--muted-foreground)); margin: 0.75rem 0; }
+.prose-os table { border-collapse: collapse; margin: 0.75rem 0; }
+.prose-os th, .prose-os td { border: 1px solid hsl(var(--border)); padding: 0.4rem 0.6rem; font-size: 0.9rem; }
+.prose-os hr { border: 0; border-top: 1px solid hsl(var(--border)); margin: 1rem 0; }
