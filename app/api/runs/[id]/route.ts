@@ -26,13 +26,12 @@ export const GET = withApiErrors(async (_req: Request, ctx: Ctx) => {
       prisma.hypothesis.count({ where: { runId: id } }),
       prisma.evidence.count({ where: { runId: id } }),
       prisma.sourceDocument.count({ where: { runId: id } }),
-      prisma.safetyFlag.count({ where: { runId: id } }),
       prisma.agentTask.count({ where: { runId: id } }),
       prisma.agentEvent.count({ where: { runId: id } }),
       prisma.finalReport.findFirst({ where: { runId: id }, orderBy: { createdAt: "desc" }, select: { id: true } }),
     ]),
   ]);
-  const [hypothesisCount, evidenceCount, sourceCount, safetyCount, taskCount, eventCount, report] = counts;
+  const [hypothesisCount, evidenceCount, sourceCount, taskCount, eventCount, report] = counts;
   return NextResponse.json({
     run,
     session,
@@ -42,7 +41,6 @@ export const GET = withApiErrors(async (_req: Request, ctx: Ctx) => {
       hypotheses: hypothesisCount,
       evidence: evidenceCount,
       sources: sourceCount,
-      safetyFlags: safetyCount,
       tasks: taskCount,
       events: eventCount,
     },

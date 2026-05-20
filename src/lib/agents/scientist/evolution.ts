@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { ModelRouter } from "@/lib/models/router";
-import { safeGenerateJSON } from "@/lib/models/safe-json";
+import { runAgentJson } from "@/lib/agents/core/prompt";
 import { writeMemory } from "@/lib/agents/core/memory";
 import type { AgentInvocation, AgentExecResult } from "./context";
 
@@ -83,7 +83,7 @@ export async function runEvolution(
     "Return ONLY the JSON object.",
   ].join("\n");
 
-  const { data } = await safeGenerateJSON({
+  const { data } = await runAgentJson({
     provider,
     schema: EvolveSchema,
     systemPrompt:
@@ -91,6 +91,8 @@ export async function runEvolution(
     userPrompt,
     maxTokens: 3000,
     temperature: 0.4,
+    signal: ctx.signal,
+    runId: ctx.run.id,
     ctx: { runId: ctx.run.id, sessionId: ctx.session.id, taskId: ctx.task.id, agentName: "EvolutionAgent" },
   });
 
@@ -122,7 +124,7 @@ export async function runEvolution(
         evidenceScore: e.scores.evidence,
         overallScore: overall,
         status: "evolved",
-        parentHypothesisIds: parents as any,
+        parentHypothesisIds: parents as unknown as object,
         createdByAgent: "EvolutionAgent",
       },
     });

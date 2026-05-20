@@ -22,7 +22,6 @@ export const GET = withApiErrors(async () => {
         model: ModelRouter.status().anthropic.model,
         purposes: [
           "supervisorPlanning",
-          "safetyClassification",
           "literatureSynthesis",
           "hypothesisGeneration",
           "hypothesisCritique",

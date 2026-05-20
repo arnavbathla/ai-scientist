@@ -6,14 +6,13 @@ import { ExternalLink } from "lucide-react";
 
 interface DrawerProps {
   evidence: any[];
-  safetyFlags: any[];
   sources: any[];
   tasks: any[];
 }
 
-type Tab = "evidence" | "safety" | "sources" | "tasks";
+type Tab = "evidence" | "sources" | "tasks";
 
-export function RunDrawer({ evidence, safetyFlags, sources, tasks }: DrawerProps) {
+export function RunDrawer({ evidence, sources, tasks }: DrawerProps) {
   const [tab, setTab] = useState<Tab>("evidence");
   return (
     <div className="flex flex-col h-full">
@@ -21,7 +20,6 @@ export function RunDrawer({ evidence, safetyFlags, sources, tasks }: DrawerProps
         {(
           [
             ["evidence", `Evidence (${evidence.length})`],
-            ["safety", `Safety (${safetyFlags.length})`],
             ["sources", `Sources (${sources.length})`],
             ["tasks", `Tasks (${tasks.length})`],
           ] as [Tab, string][]
@@ -64,17 +62,6 @@ export function RunDrawer({ evidence, safetyFlags, sources, tasks }: DrawerProps
           </div>
         ))}
         {tab === "evidence" && evidence.length === 0 && <Empty msg="No evidence yet." />}
-
-        {tab === "safety" && safetyFlags.map((f: any) => (
-          <div key={f.id} className="border border-border rounded-md p-2 bg-card/50 text-xs">
-            <div className="flex items-center justify-between mb-1">
-              <Badge variant={severityVariant(f.severity)}>{f.severity}</Badge>
-              <span className="mono text-[10px] text-muted-foreground">{f.category}</span>
-            </div>
-            <div className="text-foreground/90">{f.message}</div>
-          </div>
-        ))}
-        {tab === "safety" && safetyFlags.length === 0 && <Empty msg="No safety flags." />}
 
         {tab === "sources" && sources.map((s: any) => (
           <div key={s.id} className="border border-border rounded-md p-2 bg-card/50 text-xs">
@@ -129,21 +116,6 @@ function supportVariant(t: string): any {
     case "unsupported":
       return "danger";
     case "background":
-      return "muted";
-    default:
-      return "outline";
-  }
-}
-
-function severityVariant(s: string): any {
-  switch (s) {
-    case "blocked":
-      return "danger";
-    case "high":
-      return "danger";
-    case "medium":
-      return "warning";
-    case "low":
       return "muted";
     default:
       return "outline";

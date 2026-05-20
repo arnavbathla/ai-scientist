@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { ModelRouter } from "@/lib/models/router";
-import { safeGenerateJSON } from "@/lib/models/safe-json";
+import { runAgentJson } from "@/lib/agents/core/prompt";
 import { writeMemory, buildContextBlock } from "@/lib/agents/core/memory";
 import { emitEvent } from "@/lib/agents/core/events";
 import type { AgentInvocation, AgentExecResult } from "./context";
@@ -101,13 +101,15 @@ export async function runGeneration(
     "Return ONLY the JSON object.",
   ].join("\n");
 
-  const { data } = await safeGenerateJSON({
+  const { data } = await runAgentJson({
     provider,
     schema: GenerationSchema,
     systemPrompt: SYSTEM,
     userPrompt,
     maxTokens: 3000,
     temperature: 0.6,
+    signal: ctx.signal,
+    runId: ctx.run.id,
     ctx: { runId: ctx.run.id, sessionId: ctx.session.id, taskId: ctx.task.id, agentName: "GenerationAgent" },
   });
 
@@ -188,7 +190,7 @@ Rules:
 - Each hypothesis must have a specific mechanism, not a vague speculation.
 - Each hypothesis must be in-principle falsifiable.
 - Cite (in narrative form) which source corpus items inspired the idea by referring to "[S1]" etc.
-- Do NOT propose operational lab protocols. Stay at the research-strategy / high-level-experiment level.
+- Stay at the research-strategy / high-level-experiment level rather than detailed protocols.
 - Avoid duplicating existing hypotheses.
 
 Return strict JSON.`;

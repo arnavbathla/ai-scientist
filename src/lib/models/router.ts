@@ -7,7 +7,7 @@ import { env, hasAnthropicKey } from "@/lib/utils/env";
  *
  * Maps a research-purpose to a provider. Today every purpose routes to Anthropic
  * (claude-sonnet-4-5 by default), but the interface is purpose-keyed so a future
- * provider (e.g. a cheaper safety classifier or a different planning model) can
+ * provider (e.g. a cheaper critique model or a different planning model) can
  * be slotted in without touching agent code.
  */
 let _default: AnthropicProvider | null = null;

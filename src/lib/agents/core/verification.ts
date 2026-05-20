@@ -27,19 +27,6 @@ export const VERIFIERS: Record<string, (runId: string, taskId: string) => Promis
     return { passed: true, reason: "ok" };
   },
 
-  SafetyAgent: async (runId, taskId) => {
-    // Safety task is considered done if either it created a flag or recorded an
-    // "all clear" event for the corresponding stage.
-    const flags = await prisma.safetyFlag.count({ where: { runId } });
-    const events = await prisma.agentEvent.count({
-      where: { runId, taskId, eventType: { in: ["safety_flag", "info"] }, agentName: "SafetyAgent" },
-    });
-    if (events < 1 && flags < 1) {
-      return { passed: false, reason: "Safety agent did not emit any decision." };
-    }
-    return { passed: true, reason: "ok" };
-  },
-
   LiteratureRetrievalAgent: async (runId, taskId) => {
     const sources = await prisma.sourceDocument.count({
       where: { runId, sourceType: { in: ["pubmed", "openalex", "crossref"] } },

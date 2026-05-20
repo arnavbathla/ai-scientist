@@ -13,6 +13,7 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "worker": "tsx src/workers/index.ts",
     "db:migrate": "prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
@@ -64,6 +65,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^22.9.0",

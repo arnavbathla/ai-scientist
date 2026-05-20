@@ -22,9 +22,9 @@ const DOMAIN_SOURCES: SourceId[] = ["chembl", "uniprot", "alphafold"];
  * output) so the supervisor doesn't keep rescheduling it.
  */
 export async function runDomainRetrieval(ctx: AgentInvocation): Promise<AgentExecResult<DomainOutput>> {
-  const cfg = (ctx.run.sourceConfig as any) ?? {};
-  const constraints = (ctx.run.constraints as any) ?? {};
-  const entities = constraints?.domainEntities ?? {};
+  const cfg = (ctx.run.sourceConfig as Record<string, { enabled?: boolean; maxResults?: number }> | null) ?? {};
+  const constraints = (ctx.run.constraints as Record<string, unknown> | null) ?? {};
+  const entities = (constraints?.domainEntities ?? {}) as Record<string, string[] | undefined>;
   const goal = ctx.run.normalizedGoal ?? ctx.run.researchGoal;
 
   const queries: Partial<Record<SourceId, string[]>> = {
@@ -85,13 +85,13 @@ export async function runDomainRetrieval(ctx: AgentInvocation): Promise<AgentExe
         runId: ctx.run.id,
         sourceType: d.sourceType,
         title: d.title.slice(0, 1000),
-        authors: (d.authors ?? []) as any,
+        authors: (d.authors ?? []) as unknown as object,
         abstract: d.abstract?.slice(0, 12_000),
         url: d.url?.slice(0, 1000),
         doi: d.doi?.slice(0, 200),
         pmid: d.pmid?.slice(0, 50),
         year: d.year,
-        raw: d.raw as any,
+        raw: d.raw as unknown as object,
       })),
     });
   }

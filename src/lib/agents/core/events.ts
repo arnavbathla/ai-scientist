@@ -11,7 +11,6 @@ export interface EmitEventInput {
     | "session_failed"
     | "session_paused"
     | "session_cancelled"
-    | "session_blocked"
     | "session_resumed"
     | "phase_transition"
     | "task_created"
@@ -19,12 +18,12 @@ export interface EmitEventInput {
     | "task_completed"
     | "task_failed"
     | "task_blocked"
+    | "task_aborted"
     | "model_call"
     | "tool_call"
     | "recommendation"
     | "checkpoint"
     | "memory_write"
-    | "safety_flag"
     | "hypothesis_created"
     | "evidence_created"
     | "debate_round"
@@ -32,6 +31,9 @@ export interface EmitEventInput {
     | "completion_assessed"
     | "final_report_ready"
     | "budget_limit"
+    | "user_message"
+    | "config_updated"
+    | "step_skipped"
     | "info"
     | "error";
   title: string;
@@ -49,7 +51,7 @@ export async function emitEvent(input: EmitEventInput) {
       eventType: input.eventType,
       title: input.title,
       message: input.message,
-      payload: (input.payload ?? undefined) as any,
+      payload: (input.payload ?? undefined) as object | undefined,
     },
   });
 }

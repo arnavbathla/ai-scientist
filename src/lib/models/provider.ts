@@ -18,6 +18,8 @@ export interface GenerateTextOptions {
   maxTokens?: number;
   temperature?: number;
   stopSequences?: string[];
+  /** Cancel the in-flight model call. Hooked into AbortController in the harness. */
+  signal?: AbortSignal;
 }
 
 export interface GenerateJSONOptions extends GenerateTextOptions {
@@ -57,7 +59,6 @@ export interface ModelProvider {
 
 export type ModelPurpose =
   | "supervisorPlanning"
-  | "safetyClassification"
   | "literatureSynthesis"
   | "hypothesisGeneration"
   | "hypothesisCritique"

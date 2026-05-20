@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { ModelRouter } from "@/lib/models/router";
-import { safeGenerateJSON } from "@/lib/models/safe-json";
+import { runAgentJson } from "@/lib/agents/core/prompt";
 import { writeMemory } from "@/lib/agents/core/memory";
 import { emitEvent } from "@/lib/agents/core/events";
 import type { AgentInvocation, AgentExecResult } from "./context";
@@ -30,11 +30,12 @@ export type CompletionOutput = z.infer<typeof CompletionSchema>;
  * Returns strict JSON with isComplete + confidence + missing-work + next-tasks.
  * The supervisor gates final-report production on isComplete=true plus the
  * deterministic checklist enforced here (min 3 hypotheses, evidence coverage,
- * safety clear, contradictions addressed).
+ * contradictions addressed).
  */
 export async function runCompletionAssessment(
   ctx: AgentInvocation,
 ): Promise<AgentExecResult<CompletionOutput>> {
+  const disabledAgents = new Set<string>(((ctx.run as unknown as { disabledAgents?: string[] }).disabledAgents) ?? []);
   const [
     hyps,
     topHyps,
@@ -42,8 +43,6 @@ export async function runCompletionAssessment(
     contradictionsCount,
     rankingCount,
     sourceCount,
-    safetyBlocked,
-    safetyClearOrLow,
     completionCriteriaMemory,
     evolutionCount,
     debateCount,
@@ -62,8 +61,6 @@ export async function runCompletionAssessment(
     prisma.evidence.count({ where: { runId: ctx.run.id, supportType: "contradicts" } }),
     prisma.ranking.count({ where: { runId: ctx.run.id } }),
     prisma.sourceDocument.count({ where: { runId: ctx.run.id } }),
-    prisma.safetyFlag.findFirst({ where: { runId: ctx.run.id, severity: "blocked" } }),
-    prisma.safetyFlag.count({ where: { runId: ctx.run.id, severity: { in: ["low", "medium"] } } }),
     prisma.agentMemory.findFirst({
       where: { runId: ctx.run.id, memoryType: "decision", title: "Completion criteria" },
     }),
@@ -74,17 +71,16 @@ export async function runCompletionAssessment(
   ]);
 
   // Hard deterministic floor: even if the model says complete, we override on these.
+  // We weaken floors for agents the user has disabled (e.g. skipping Evolution).
   const deterministicBlockers: string[] = [];
-  if (safetyBlocked) {
-    deterministicBlockers.push(`Safety flag (blocked) present: ${safetyBlocked.message.slice(0, 200)}`);
-  }
   if (hyps.length < 3) deterministicBlockers.push(`Only ${hyps.length} candidate hypotheses; need >= 3.`);
-  if (topHyps.length === 0)
+  if (topHyps.length === 0 && !disabledAgents.has("RankingAgent") && !disabledAgents.has("EvolutionAgent"))
     deterministicBlockers.push("No hypotheses have reached debated/evolved/selected status.");
-  if (evidenceCount === 0 && sourceCount > 0)
+  if (evidenceCount === 0 && sourceCount > 0 && !disabledAgents.has("VerificationAgent"))
     deterministicBlockers.push("No evidence rows linking hypotheses to sources.");
-  if (rankingCount === 0) deterministicBlockers.push("No ranking rows.");
-  if (evolutionCount === 0) deterministicBlockers.push("No evolution pass completed.");
+  if (rankingCount === 0 && !disabledAgents.has("RankingAgent")) deterministicBlockers.push("No ranking rows.");
+  if (evolutionCount === 0 && !disabledAgents.has("EvolutionAgent"))
+    deterministicBlockers.push("No evolution pass completed.");
 
   const provider = ModelRouter.for("completionAssessment");
   const userPrompt = [
@@ -102,10 +98,9 @@ export async function runCompletionAssessment(
     `- Top hypotheses have evidence support`,
     `- Contradictory evidence addressed`,
     `- Unsupported claims marked`,
-    `- Safety review passed`,
     `- At least 3 final hypotheses`,
     `- Final recommendation will be clear`,
-    `- Final report will include references, falsification criteria, safe next steps, limitations, open questions`,
+    `- Final report will include references, falsification criteria, next steps, limitations, open questions`,
     "",
     "Current state:",
     `- Sources stored: ${sourceCount}`,
@@ -115,7 +110,9 @@ export async function runCompletionAssessment(
     `- Debate rounds: ${debateCount}`,
     `- Ranking rows: ${rankingCount}`,
     `- Evolution passes completed: ${evolutionCount}`,
-    `- Safety: blocked=${Boolean(safetyBlocked)}, low/medium flags=${safetyClearOrLow}`,
+    disabledAgents.size > 0
+      ? `- Disabled agents (user opted to skip): ${Array.from(disabledAgents).join(", ")}`
+      : "- No agents disabled",
     "",
     "Top hypotheses (preview):",
     hyps
@@ -135,7 +132,7 @@ export async function runCompletionAssessment(
     "Return ONLY the JSON object.",
   ].join("\n");
 
-  const { data } = await safeGenerateJSON({
+  const { data } = await runAgentJson({
     provider,
     schema: CompletionSchema,
     systemPrompt:
@@ -143,6 +140,8 @@ export async function runCompletionAssessment(
     userPrompt,
     maxTokens: 1500,
     temperature: 0.1,
+    signal: ctx.signal,
+    runId: ctx.run.id,
     ctx: { runId: ctx.run.id, sessionId: ctx.session.id, taskId: ctx.task.id, agentName: "CompletionAssessorAgent" },
   });
 
@@ -163,9 +162,9 @@ export async function runCompletionAssessment(
       sessionId: ctx.session.id,
       isComplete: finalData.isComplete,
       confidenceScore: finalData.confidenceScore,
-      missingWork: finalData.missingWork as any,
-      blockers: finalData.blockers as any,
-      recommendedNextTasks: finalData.recommendedNextTasks as any,
+      missingWork: finalData.missingWork as unknown as object,
+      blockers: finalData.blockers as unknown as object,
+      recommendedNextTasks: finalData.recommendedNextTasks as unknown as object,
       rationale: finalData.rationale.slice(0, 4000),
     },
   });
@@ -191,7 +190,7 @@ export async function runCompletionAssessment(
       sessionId: ctx.session.id,
       memoryType: "blocker",
       title: "Completion blockers",
-      content: blockers.join("\n"),
+      content: blockers.join("\n") || "(see assessor recommendations)",
       payload: { blockers, recommendedNextTasks: finalData.recommendedNextTasks },
       importanceScore: 0.8,
     });

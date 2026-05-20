@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { ModelRouter } from "@/lib/models/router";
-import { safeGenerateJSON } from "@/lib/models/safe-json";
+import { runAgentJson } from "@/lib/agents/core/prompt";
 import { writeMemory } from "@/lib/agents/core/memory";
 import { emitEvent } from "@/lib/agents/core/events";
 import type { AgentInvocation, AgentExecResult } from "./context";
@@ -110,7 +110,7 @@ export async function runVerification(
     "Return ONLY the JSON object.",
   ].join("\n");
 
-  const { data } = await safeGenerateJSON({
+  const { data } = await runAgentJson({
     provider,
     schema: EvidenceSchema,
     systemPrompt:
@@ -118,6 +118,8 @@ export async function runVerification(
     userPrompt,
     maxTokens: 3500,
     temperature: 0.2,
+    signal: ctx.signal,
+    runId: ctx.run.id,
     ctx: { runId: ctx.run.id, sessionId: ctx.session.id, taskId: ctx.task.id, agentName: "VerificationAgent" },
   });
 

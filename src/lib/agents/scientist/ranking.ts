@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { ModelRouter } from "@/lib/models/router";
-import { safeGenerateJSON } from "@/lib/models/safe-json";
+import { runAgentJson } from "@/lib/agents/core/prompt";
 import { writeMemory } from "@/lib/agents/core/memory";
 import { emitEvent } from "@/lib/agents/core/events";
 import type { AgentInvocation, AgentExecResult } from "./context";
@@ -72,13 +72,15 @@ export async function runRanking(
     const a = candidates.find((c) => c.id === aId)!;
     const b = candidates.find((c) => c.id === bId)!;
     try {
-      const { data } = await safeGenerateJSON({
+      const { data } = await runAgentJson({
         provider,
         schema: JudgeSchema,
         systemPrompt: JUDGE_SYSTEM,
         userPrompt: buildDebatePrompt(ctx, a, b),
         maxTokens: 1500,
         temperature: 0.3,
+        signal: ctx.signal,
+        runId: ctx.run.id,
         ctx: { runId: ctx.run.id, sessionId: ctx.session.id, taskId: ctx.task.id, agentName: "RankingAgent" },
       });
       const winnerId = data.winner === "A" ? a.id : data.winner === "B" ? b.id : null;

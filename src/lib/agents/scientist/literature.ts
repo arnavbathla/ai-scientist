@@ -32,13 +32,13 @@ const LIT_SOURCES: SourceId[] = ["pubmed", "openalex", "crossref"];
  * the budget.
  */
 export async function runLiteratureRetrieval(ctx: AgentInvocation): Promise<AgentExecResult<LitRetrievalOutput>> {
-  const cfg = (ctx.run.sourceConfig as any) ?? {};
-  const constraints = (ctx.run.constraints as any) ?? {};
-  const retrievalPlan = constraints?.retrievalPlan ?? null;
+  const cfg = (ctx.run.sourceConfig as Record<string, { enabled?: boolean; maxResults?: number }> | null) ?? {};
+  const constraints = (ctx.run.constraints as Record<string, unknown> | null) ?? {};
+  const retrievalPlan = (constraints?.retrievalPlan ?? null) as { queries?: string[]; sources?: string[] } | null;
 
   const queries: string[] =
     retrievalPlan?.queries && Array.isArray(retrievalPlan.queries) && retrievalPlan.queries.length > 0
-      ? retrievalPlan.queries.slice(0, 6)
+      ? (retrievalPlan.queries as string[]).slice(0, 6)
       : [ctx.run.normalizedGoal ?? ctx.run.researchGoal];
 
   const attempted: string[] = [];
@@ -121,13 +121,13 @@ export async function runLiteratureRetrieval(ctx: AgentInvocation): Promise<Agen
         runId: ctx.run.id,
         sourceType: d.sourceType,
         title: d.title.slice(0, 1000),
-        authors: (d.authors ?? []) as any,
+        authors: (d.authors ?? []) as unknown as object,
         abstract: d.abstract?.slice(0, 12_000),
         url: d.url?.slice(0, 1000),
         doi: d.doi?.slice(0, 200),
         pmid: d.pmid?.slice(0, 50),
         year: d.year,
-        raw: d.raw as any,
+        raw: d.raw as unknown as object,
       })),
     });
   }

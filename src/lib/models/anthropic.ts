@@ -99,22 +99,27 @@ export class AnthropicProvider implements ModelProvider {
     let text = "";
 
     try {
-      const res = await this.client.messages.create({
-        model: this.model,
-        max_tokens: opts.maxTokens ?? 2048,
-        temperature: opts.temperature ?? 0.4,
-        system: opts.systemPrompt,
-        stop_sequences: opts.stopSequences,
-        messages: [{ role: "user", content: opts.userPrompt }],
-      });
+      const res = await this.client.messages.create(
+        {
+          model: this.model,
+          max_tokens: opts.maxTokens ?? 2048,
+          temperature: opts.temperature ?? 0.4,
+          system: opts.systemPrompt,
+          stop_sequences: opts.stopSequences,
+          messages: [{ role: "user", content: opts.userPrompt }],
+        },
+        opts.signal ? { signal: opts.signal } : undefined,
+      );
       text = textFromContent(res.content);
       promptTokens = res.usage?.input_tokens;
       completionTokens = res.usage?.output_tokens;
       stopReason = res.stop_reason ?? undefined;
     } catch (err) {
-      status = "error";
+      status = isAbortError(err) ? "aborted" : "error";
       error = err instanceof Error ? err.message : String(err);
-      logger.error({ err: error, ctx }, "anthropic.invoke failed");
+      if (status !== "aborted") {
+        logger.error({ err: error, ctx }, "anthropic.invoke failed");
+      }
       throw err;
     } finally {
       const latencyMs = Date.now() - t0;
@@ -159,4 +164,13 @@ function textFromContent(content: Anthropic.Messages.ContentBlock[]): string {
     if (block.type === "text") parts.push(block.text);
   }
   return parts.join("\n").trim();
+}
+
+export function isAbortError(err: unknown): boolean {
+  if (!err) return false;
+  if (err instanceof Error) {
+    if (err.name === "AbortError") return true;
+    if (/abort/i.test(err.message)) return true;
+  }
+  return false;
 }

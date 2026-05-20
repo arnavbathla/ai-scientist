@@ -42,12 +42,10 @@ export function NewRunButton({ projectId, defaultDomain }: NewRunButtonProps) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  // Advanced
   const [maxIterations, setMaxIterations] = useState<number>(25);
   const [maxRuntimeMinutes, setMaxRuntimeMinutes] = useState<number>(180);
   const [maxSources, setMaxSources] = useState<number>(100);
   const [maxHypotheses, setMaxHypotheses] = useState<number>(40);
-  const [safetySensitivity, setSafetySensitivity] = useState<"low" | "standard" | "high">("standard");
   const [sourceEnabled, setSourceEnabled] = useState<Record<string, boolean>>({
     pubmed: true,
     openalex: true,
@@ -76,7 +74,6 @@ export function NewRunButton({ projectId, defaultDomain }: NewRunButtonProps) {
           projectId,
           researchGoal: goal,
           domain,
-          safetySensitivity,
           maxIterations,
           maxRuntimeMinutes,
           maxSources,
@@ -129,38 +126,23 @@ export function NewRunButton({ projectId, defaultDomain }: NewRunButtonProps) {
                   value={goal}
                   onChange={(e) => setGoal(e.target.value)}
                   rows={5}
-                  placeholder="e.g. Identify plausible, testable gene-regulatory hypotheses that could improve cellular rejuvenation markers in human fibroblasts, using only safe high-level research reasoning."
+                  placeholder="e.g. Identify plausible, testable gene-regulatory hypotheses that could improve cellular rejuvenation markers in human fibroblasts."
                 />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="domain">Domain</Label>
-                  <select
-                    id="domain"
-                    value={domain}
-                    onChange={(e) => setDomain(e.target.value)}
-                    className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm"
-                  >
-                    {DOMAINS.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="sensitivity">Safety sensitivity</Label>
-                  <select
-                    id="sensitivity"
-                    value={safetySensitivity}
-                    onChange={(e) => setSafetySensitivity(e.target.value as any)}
-                    className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm"
-                  >
-                    <option value="low">Low</option>
-                    <option value="standard">Standard</option>
-                    <option value="high">High</option>
-                  </select>
-                </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="domain">Domain</Label>
+                <select
+                  id="domain"
+                  value={domain}
+                  onChange={(e) => setDomain(e.target.value)}
+                  className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm"
+                >
+                  {DOMAINS.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <button
@@ -286,7 +268,7 @@ function csv(s: string): string[] {
 function clean<T extends Record<string, string[] | undefined>>(o: T): T {
   const out = {} as T;
   for (const [k, v] of Object.entries(o)) {
-    if (Array.isArray(v) && v.length > 0) (out as any)[k] = v;
+    if (Array.isArray(v) && v.length > 0) (out as Record<string, string[]>)[k] = v;
   }
   return out;
 }

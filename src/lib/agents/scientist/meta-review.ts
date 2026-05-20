@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { ModelRouter } from "@/lib/models/router";
-import { safeGenerateJSON } from "@/lib/models/safe-json";
+import { runAgentJson } from "@/lib/agents/core/prompt";
 import { writeMemory } from "@/lib/agents/core/memory";
 import { emitEvent } from "@/lib/agents/core/events";
 import type { AgentInvocation, AgentExecResult } from "./context";
@@ -30,7 +30,6 @@ const ReportSchema = z.object({
   unsupportedClaims: z.array(z.string()).default([]),
   nextExperimentsHighLevel: z.array(z.string()).min(1),
   falsificationCriteria: z.array(z.string()).min(1),
-  safetyNotes: z.array(z.string()).min(1),
   limitations: z.array(z.string()).min(1),
   openQuestions: z.array(z.string()).min(1),
   unresolvedGaps: z.array(z.string()).default([]),
@@ -49,9 +48,8 @@ export async function runMetaReview(
     rankings,
     evidence,
     sources,
-    safetyFlags,
     latestAssessment,
-    safetyNotesMemory,
+    userInstructions,
     unresolvedNotes,
   ] = await Promise.all([
     prisma.researchRun.findUniqueOrThrow({ where: { id: ctx.run.id } }),
@@ -81,17 +79,12 @@ export async function runMetaReview(
       orderBy: { createdAt: "desc" },
       take: 40,
     }),
-    prisma.safetyFlag.findMany({
-      where: { runId: ctx.run.id },
-      orderBy: { severity: "desc" },
-      take: 20,
-    }),
     prisma.completionAssessment.findFirst({
       where: { runId: ctx.run.id },
       orderBy: { createdAt: "desc" },
     }),
     prisma.agentMemory.findMany({
-      where: { runId: ctx.run.id, memoryType: "safety_note" },
+      where: { runId: ctx.run.id, memoryType: "user_instruction" },
       orderBy: { createdAt: "desc" },
       take: 8,
     }),
@@ -131,11 +124,10 @@ export async function runMetaReview(
       )
       .join("\n"),
     "",
-    "Safety flags:",
-    safetyFlags.map((f) => `  - ${f.severity}/${f.category}: ${f.message.slice(0, 240)}`).join("\n") || "  (none)",
-    "",
-    "Recent safety notes:",
-    safetyNotesMemory.map((m) => `  - ${m.title}: ${m.content.slice(0, 200)}`).join("\n") || "  (none)",
+    userInstructions.length
+      ? "Recent user follow-up instructions (honor these):\n" +
+        userInstructions.map((m) => `  - ${m.title}: ${m.content.slice(0, 240)}`).join("\n")
+      : "",
     "",
     "Sources used (with identifiers; cite by number S1..Sn in the report):",
     sources
@@ -169,7 +161,6 @@ export async function runMetaReview(
   "unsupportedClaims": ["..."],
   "nextExperimentsHighLevel": ["high-level direction 1", "..."],
   "falsificationCriteria": ["how each top hypothesis could be falsified, conceptually"],
-  "safetyNotes": ["safety considerations and constraints"],
   "limitations": ["..."],
   "openQuestions": ["..."],
   "unresolvedGaps": ["..."]
@@ -180,13 +171,15 @@ export async function runMetaReview(
     .filter(Boolean)
     .join("\n");
 
-  const { data } = await safeGenerateJSON({
+  const { data } = await runAgentJson({
     provider,
     schema: ReportSchema,
     systemPrompt: META_SYSTEM,
     userPrompt,
     maxTokens: 5500,
     temperature: 0.25,
+    signal: ctx.signal,
+    runId: ctx.run.id,
     ctx: { runId: ctx.run.id, sessionId: ctx.session.id, taskId: ctx.task.id, agentName: "MetaReviewAgent" },
   });
 
@@ -241,16 +234,15 @@ export async function runMetaReview(
 }
 
 const META_SYSTEM = `You are the ResearchOS MetaReviewAgent. You synthesize the entire research run into a
-publication-quality final report focused on safe, high-level research planning.
+publication-quality final report focused on high-level research planning.
 
 Strict rules:
-- Never propose operational wetlab protocols.
 - Each top hypothesis must include a mechanism, falsification criteria, and a high-level next step.
 - Always include references with DOI/PMID/URL.
 - Always include limitations, open questions, and unresolved gaps.
-- Always include safety notes.
 - Always cite supporting sources by their S-number; refer to identifiers (DOI, PMID) where available.
 - If the run was a partial report, say so plainly in the executive summary.
+- Honor any "Recent user follow-up instructions" provided in the prompt.
 
 Return strict JSON.`;
 
@@ -336,10 +328,6 @@ function renderMarkdown({
 
   lines.push("## Falsification criteria");
   for (const f of data.falsificationCriteria) lines.push(`- ${f}`);
-  lines.push("");
-
-  lines.push("## Safety and ethics notes");
-  for (const s of data.safetyNotes) lines.push(`- ${s}`);
   lines.push("");
 
   lines.push("## Limitations");

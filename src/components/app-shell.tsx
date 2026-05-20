@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
-import { FolderKanban, FlaskConical, Settings, LayoutDashboard, LogOut } from "lucide-react";
+import { FolderKanban, FlaskConical, Settings, LayoutDashboard, LogOut, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 
 interface AppShellProps {
@@ -13,6 +13,7 @@ interface AppShellProps {
 const NAV: Array<{ href: string; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/projects", label: "Projects", icon: FolderKanban },
+  { href: "/skills", label: "Skills", icon: Sparkles },
   { href: "/settings/models", label: "Models", icon: Settings },
   { href: "/settings/sources", label: "Sources", icon: FlaskConical },
 ];

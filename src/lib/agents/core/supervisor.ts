@@ -7,12 +7,15 @@ import type { AgentSession, ResearchRun } from "@prisma/client";
  * Decides the next task for an active session by reading durable state.
  *
  * The policy is phase-aware and gates progression on minimum coverage:
- *  - Safety intake must happen before any retrieval/generation.
  *  - At least one literature retrieval pass must precede generation.
  *  - At least one generation pass must precede clustering/reflection.
  *  - Reflection, verification, ranking, and at least one evolution pass must
  *    precede the final report.
  *  - CompletionAssessor decides whether more passes are needed.
+ *  - Any agent listed in `run.disabledAgents` is skipped entirely; if its
+ *    gate is "required" the supervisor falls through to the next stage.
+ *  - Recent user instructions (mid-run follow-up messages) are surfaced to
+ *    every agent via memory, never modifying the supervisor decision tree.
  *
  * Recommendations from prior agents (stored as events with type "recommendation")
  * boost the priority of matching candidate actions but never bypass the gates.
@@ -22,11 +25,10 @@ export type SupervisorAction =
   | { kind: "schedule"; agentName: SupervisorScientistName; phase: string; reason: string }
   | { kind: "assess_completion"; reason: string }
   | { kind: "produce_final_report"; reason: string }
-  | { kind: "stop"; status: "completed" | "blocked"; reason: string };
+  | { kind: "stop"; status: "completed"; reason: string };
 
 export type SupervisorScientistName =
   | "InitializerAgent"
-  | "SafetyAgent"
   | "LiteratureRetrievalAgent"
   | "DomainRetrievalAgent"
   | "GenerationAgent"
@@ -40,7 +42,6 @@ export type SupervisorScientistName =
 export interface SupervisorState {
   iteration: number;
   initialized: boolean;
-  safetyIntakeDone: boolean;
   retrievalPasses: number;
   domainRetrievalPasses: number;
   hypothesisCount: number;
@@ -49,16 +50,15 @@ export interface SupervisorState {
   verificationPasses: number;
   rankingPasses: number;
   evolutionPasses: number;
-  safetyReviewPasses: number;
   finalReportExists: boolean;
   completionPassed: boolean;
+  disabledAgents: Set<string>;
   recommendations: { kind: string; target: string; rationale: string; fromAgent: string }[];
 }
 
 export async function readSupervisorState(run: ResearchRun, session: AgentSession): Promise<SupervisorState> {
   const [
     initCount,
-    safetyTaskCount,
     litTaskCount,
     domainTaskCount,
     hypothesisCount,
@@ -66,16 +66,12 @@ export async function readSupervisorState(run: ResearchRun, session: AgentSessio
     verificationTaskCount,
     rankingTaskCount,
     evolutionTaskCount,
-    safetyReviewTaskCount,
     finalReport,
     latestAssessment,
     recommendationEvents,
   ] = await Promise.all([
     prisma.agentTask.count({
       where: { runId: run.id, agentName: "InitializerAgent", status: "completed" },
-    }),
-    prisma.agentTask.count({
-      where: { runId: run.id, agentName: "SafetyAgent", status: "completed" },
     }),
     prisma.agentTask.count({
       where: { runId: run.id, agentName: "LiteratureRetrievalAgent", status: "completed" },
@@ -96,14 +92,6 @@ export async function readSupervisorState(run: ResearchRun, session: AgentSessio
     prisma.agentTask.count({
       where: { runId: run.id, agentName: "EvolutionAgent", status: "completed" },
     }),
-    prisma.agentTask.count({
-      where: {
-        runId: run.id,
-        agentName: "SafetyAgent",
-        status: "completed",
-        title: { contains: "review", mode: "insensitive" },
-      },
-    }),
     prisma.finalReport.findFirst({ where: { runId: run.id }, orderBy: { createdAt: "desc" } }),
     prisma.completionAssessment.findFirst({
       where: { runId: run.id },
@@ -120,10 +108,11 @@ export async function readSupervisorState(run: ResearchRun, session: AgentSessio
     where: { runId: run.id, status: { in: ["debated", "evolved", "selected"] } },
   });
 
+  const disabledAgents = new Set<string>(((run as unknown as { disabledAgents?: string[] }).disabledAgents) ?? []);
+
   return {
     iteration: session.iterationCount,
     initialized: initCount > 0,
-    safetyIntakeDone: safetyTaskCount > 0,
     retrievalPasses: litTaskCount,
     domainRetrievalPasses: domainTaskCount,
     hypothesisCount,
@@ -132,12 +121,12 @@ export async function readSupervisorState(run: ResearchRun, session: AgentSessio
     verificationPasses: verificationTaskCount,
     rankingPasses: rankingTaskCount,
     evolutionPasses: evolutionTaskCount,
-    safetyReviewPasses: safetyReviewTaskCount,
     finalReportExists: Boolean(finalReport),
     completionPassed: Boolean(latestAssessment?.isComplete),
+    disabledAgents,
     recommendations: recommendationEvents.map((e) => ({
-      kind: (e.payload as any)?.kind ?? "phase",
-      target: (e.payload as any)?.target ?? "",
+      kind: (e.payload as { kind?: string } | null)?.kind ?? "phase",
+      target: (e.payload as { target?: string } | null)?.target ?? "",
       rationale: e.message,
       fromAgent: e.agentName,
     })),
@@ -146,8 +135,9 @@ export async function readSupervisorState(run: ResearchRun, session: AgentSessio
 
 export async function pickNextAction(run: ResearchRun, session: AgentSession): Promise<SupervisorAction> {
   const s = await readSupervisorState(run, session);
+  const isDisabled = (name: SupervisorScientistName) => s.disabledAgents.has(name);
 
-  if (!s.initialized) {
+  if (!s.initialized && !isDisabled("InitializerAgent")) {
     return {
       kind: "schedule",
       agentName: "InitializerAgent",
@@ -156,28 +146,7 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
     };
   }
 
-  if (!s.safetyIntakeDone) {
-    return {
-      kind: "schedule",
-      agentName: "SafetyAgent",
-      phase: "safety_intake",
-      reason: "Review the research goal for safety before further work.",
-    };
-  }
-
-  // If safety has already blocked, stop.
-  const blocked = await prisma.safetyFlag.findFirst({
-    where: { runId: run.id, severity: "blocked" },
-  });
-  if (blocked) {
-    return {
-      kind: "stop",
-      status: "blocked",
-      reason: `Safety policy blocked: ${blocked.message.slice(0, 200)}`,
-    };
-  }
-
-  if (s.retrievalPasses === 0) {
+  if (s.retrievalPasses === 0 && !isDisabled("LiteratureRetrievalAgent")) {
     return {
       kind: "schedule",
       agentName: "LiteratureRetrievalAgent",
@@ -186,7 +155,7 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
     };
   }
 
-  if (s.domainRetrievalPasses === 0 && shouldAttemptDomain(run)) {
+  if (s.domainRetrievalPasses === 0 && shouldAttemptDomain(run) && !isDisabled("DomainRetrievalAgent")) {
     return {
       kind: "schedule",
       agentName: "DomainRetrievalAgent",
@@ -195,7 +164,7 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
     };
   }
 
-  if (s.hypothesisCount === 0) {
+  if (s.hypothesisCount === 0 && !isDisabled("GenerationAgent")) {
     return {
       kind: "schedule",
       agentName: "GenerationAgent",
@@ -204,7 +173,7 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
     };
   }
 
-  if (s.reflectionPasses === 0) {
+  if (s.reflectionPasses === 0 && !isDisabled("ReflectionAgent")) {
     return {
       kind: "schedule",
       agentName: "ReflectionAgent",
@@ -217,7 +186,7 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
   const clusterCount = await prisma.hypothesis.count({
     where: { runId: run.id, clusterId: { not: null } },
   });
-  if (clusterCount === 0 && s.hypothesisCount >= 3) {
+  if (clusterCount === 0 && s.hypothesisCount >= 3 && !isDisabled("ProximityAgent")) {
     return {
       kind: "schedule",
       agentName: "ProximityAgent",
@@ -226,7 +195,7 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
     };
   }
 
-  if (s.verificationPasses === 0) {
+  if (s.verificationPasses === 0 && !isDisabled("VerificationAgent")) {
     return {
       kind: "schedule",
       agentName: "VerificationAgent",
@@ -235,7 +204,7 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
     };
   }
 
-  if (s.rankingPasses === 0) {
+  if (s.rankingPasses === 0 && !isDisabled("RankingAgent")) {
     return {
       kind: "schedule",
       agentName: "RankingAgent",
@@ -244,7 +213,7 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
     };
   }
 
-  if (s.evolutionPasses === 0) {
+  if (s.evolutionPasses === 0 && !isDisabled("EvolutionAgent")) {
     return {
       kind: "schedule",
       agentName: "EvolutionAgent",
@@ -265,12 +234,15 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
     ].includes(r.target),
   );
   if (reco) {
-    return {
-      kind: "schedule",
-      agentName: phaseToAgent(reco.target),
-      phase: reco.target,
-      reason: `Recommendation from ${reco.fromAgent}: ${reco.rationale}`,
-    };
+    const candidate = phaseToAgent(reco.target);
+    if (!isDisabled(candidate)) {
+      return {
+        kind: "schedule",
+        agentName: candidate,
+        phase: reco.target,
+        reason: `Recommendation from ${reco.fromAgent}: ${reco.rationale}`,
+      };
+    }
   }
 
   // Periodic completion assessment.
@@ -287,15 +259,6 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
   }
 
   if (s.completionPassed && !s.finalReportExists) {
-    // Safety review before final report.
-    if (s.safetyReviewPasses === 0) {
-      return {
-        kind: "schedule",
-        agentName: "SafetyAgent",
-        phase: "safety_review",
-        reason: "Safety review before final report.",
-      };
-    }
     return { kind: "produce_final_report", reason: "Completion criteria met; produce final report." };
   }
 
@@ -306,8 +269,9 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
   // If we got here, the latest assessment said incomplete — re-loop with another retrieval or generation pass.
   if (latestAssessment) {
     const missing = (latestAssessment.missingWork as unknown as string[] | undefined) ?? [];
-    const next = (latestAssessment.recommendedNextTasks as unknown as { agent?: string; reason?: string }[] | undefined) ?? [];
-    const candidate = next.find((n) => n.agent && isScientist(n.agent));
+    const next =
+      (latestAssessment.recommendedNextTasks as unknown as { agent?: string; reason?: string }[] | undefined) ?? [];
+    const candidate = next.find((n) => n.agent && isScientist(n.agent) && !s.disabledAgents.has(n.agent));
     if (candidate?.agent) {
       return {
         kind: "schedule",
@@ -316,7 +280,7 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
         reason: candidate.reason ?? "Completion assessor recommended this agent.",
       };
     }
-    if (missing.some((m) => /retriev/i.test(m))) {
+    if (missing.some((m) => /retriev/i.test(m)) && !isDisabled("LiteratureRetrievalAgent")) {
       return {
         kind: "schedule",
         agentName: "LiteratureRetrievalAgent",
@@ -324,7 +288,7 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
         reason: "Completion assessor flagged insufficient sources.",
       };
     }
-    if (missing.some((m) => /evolve|evolution|specific/i.test(m))) {
+    if (missing.some((m) => /evolve|evolution|specific/i.test(m)) && !isDisabled("EvolutionAgent")) {
       return {
         kind: "schedule",
         agentName: "EvolutionAgent",
@@ -332,7 +296,7 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
         reason: "Completion assessor flagged need for more evolution.",
       };
     }
-    if (missing.some((m) => /diversit|cluster|underexplored/i.test(m))) {
+    if (missing.some((m) => /diversit|cluster|underexplored/i.test(m)) && !isDisabled("GenerationAgent")) {
       return {
         kind: "schedule",
         agentName: "GenerationAgent",
@@ -342,17 +306,15 @@ export async function pickNextAction(run: ResearchRun, session: AgentSession): P
     }
   }
 
-  // Fall through: try another reflection pass.
-  return {
-    kind: "schedule",
-    agentName: "ReflectionAgent",
-    phase: "reflection",
-    reason: "Default fallback: re-reflect on current state.",
-  };
+  // Fall through: produce report rather than loop forever if everything else is disabled.
+  if (!s.finalReportExists) {
+    return { kind: "produce_final_report", reason: "All gates passed or disabled; producing final report." };
+  }
+  return { kind: "stop", status: "completed", reason: "Nothing left to do." };
 }
 
 function shouldAttemptDomain(run: ResearchRun): boolean {
-  const cfg = (run.sourceConfig as any) ?? {};
+  const cfg = (run.sourceConfig as Record<string, { enabled?: boolean }> | null) ?? {};
   const enabled = (id: string) => cfg?.[id]?.enabled === true;
   return enabled("chembl") || enabled("uniprot") || enabled("alphafold");
 }
@@ -360,7 +322,6 @@ function shouldAttemptDomain(run: ResearchRun): boolean {
 function isScientist(name: string): name is SupervisorScientistName {
   return [
     "InitializerAgent",
-    "SafetyAgent",
     "LiteratureRetrievalAgent",
     "DomainRetrievalAgent",
     "GenerationAgent",
@@ -396,8 +357,6 @@ function agentToPhase(agent: SupervisorScientistName): string {
   switch (agent) {
     case "InitializerAgent":
       return "initializing";
-    case "SafetyAgent":
-      return "safety_intake";
     case "LiteratureRetrievalAgent":
       return "literature_retrieval";
     case "DomainRetrievalAgent":

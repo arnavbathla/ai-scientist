@@ -10,7 +10,6 @@ import type {
  */
 export const PHASES = [
   "initializing",
-  "safety_intake",
   "literature_retrieval",
   "domain_retrieval",
   "generation",
@@ -19,12 +18,10 @@ export const PHASES = [
   "verification",
   "ranking",
   "evolution",
-  "safety_review",
   "completion_assessment",
   "meta_review",
   "final_report",
   "completed",
-  "blocked",
 ] as const;
 
 export type Phase = (typeof PHASES)[number];

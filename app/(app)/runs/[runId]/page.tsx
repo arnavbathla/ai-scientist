@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth/auth";
 import { prisma } from "@/lib/db/prisma";
 import { env } from "@/lib/utils/env";
 import { RunView } from "@/components/run/run-view";
+import { listSkillsForUser, listRunSkills } from "@/lib/skills/service";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,7 @@ export default async function RunPage({ params }: PageProps) {
   if (!run) notFound();
   if (run.userId !== userId) redirect("/projects");
 
-  const [agentSession, events, hypotheses, evidence, safetyFlags, sources, tasks, report, latestAssessment, rankings, counts] =
+  const [agentSession, events, hypotheses, evidence, sources, tasks, report, latestAssessment, rankings, counts, allSkills, runSkills] =
     await Promise.all([
       prisma.agentSession.findFirst({
         where: { runId },
@@ -31,7 +32,7 @@ export default async function RunPage({ params }: PageProps) {
       prisma.agentEvent.findMany({
         where: { runId },
         orderBy: { createdAt: "asc" },
-        take: 200,
+        take: 300,
       }),
       prisma.hypothesis.findMany({
         where: { runId },
@@ -43,7 +44,6 @@ export default async function RunPage({ params }: PageProps) {
         take: 200,
         include: { source: true },
       }),
-      prisma.safetyFlag.findMany({ where: { runId }, orderBy: { createdAt: "desc" } }),
       prisma.sourceDocument.findMany({
         where: { runId },
         orderBy: { createdAt: "desc" },
@@ -58,10 +58,11 @@ export default async function RunPage({ params }: PageProps) {
         prisma.hypothesis.count({ where: { runId } }),
         prisma.evidence.count({ where: { runId } }),
         prisma.sourceDocument.count({ where: { runId } }),
-        prisma.safetyFlag.count({ where: { runId } }),
         prisma.agentTask.count({ where: { runId } }),
         prisma.agentEvent.count({ where: { runId } }),
       ]),
+      listSkillsForUser(userId, { projectId: run.projectId }),
+      listRunSkills(runId),
     ]);
 
   const latestEloByHyp: Record<string, { eloScore: number; rank: number }> = {};
@@ -83,18 +84,18 @@ export default async function RunPage({ params }: PageProps) {
         hypotheses: counts[0],
         evidence: counts[1],
         sources: counts[2],
-        safetyFlags: counts[3],
-        tasks: counts[4],
-        events: counts[5],
+        tasks: counts[3],
+        events: counts[4],
       }}
       initialLatestAssessment={JSON.parse(JSON.stringify(latestAssessment))}
       initialEvents={JSON.parse(JSON.stringify(events))}
       initialHypotheses={JSON.parse(JSON.stringify(hypothesesWithRanking))}
       initialEvidence={JSON.parse(JSON.stringify(evidence))}
-      initialSafetyFlags={JSON.parse(JSON.stringify(safetyFlags))}
       initialSources={JSON.parse(JSON.stringify(sources))}
       initialTasks={JSON.parse(JSON.stringify(tasks))}
       initialReport={report ? JSON.parse(JSON.stringify(report)) : null}
+      initialSkills={JSON.parse(JSON.stringify(allSkills))}
+      initialRunSkills={JSON.parse(JSON.stringify(runSkills))}
       modelLabel={`anthropic · ${env().ANTHROPIC_MODEL}`}
     />
   );

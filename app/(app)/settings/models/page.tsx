@@ -34,7 +34,7 @@ export default async function ModelsSettings() {
           </CardHeader>
           <CardContent>
             <div className="text-sm text-muted-foreground mb-3">
-              All agent purposes (planning, safety, retrieval synthesis, generation, critique,
+              All agent purposes (planning, retrieval synthesis, generation, critique,
               verification, debate judge, evolution, completion, final report) currently route
               through Anthropic.
             </div>
@@ -56,9 +56,9 @@ ANTHROPIC_MODEL=${status.anthropic.model}`}
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
             The <code className="mono text-[12px]">ModelProvider</code> interface is provider-agnostic.
-            Additional providers (e.g. cheaper safety classifiers, alternative final-report
-            models) can be added in <code className="mono text-[12px]">src/lib/models/</code> and
-            routed via <code className="mono text-[12px]">ModelRouter.for(purpose)</code>.
+            Additional providers (e.g. alternative final-report models or cheaper critique models)
+            can be added in <code className="mono text-[12px]">src/lib/models/</code> and routed via
+            <code className="mono text-[12px]">ModelRouter.for(purpose)</code>.
           </CardContent>
         </Card>
       </div>

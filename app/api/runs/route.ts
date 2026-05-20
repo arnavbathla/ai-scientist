@@ -37,12 +37,12 @@ const createSchema = z.object({
       alphafold: sourceCfg.optional(),
     })
     .optional(),
-  safetySensitivity: z.enum(["low", "standard", "high"]).optional(),
   maxIterations: z.number().int().min(1).max(200).optional(),
   maxRuntimeMinutes: z.number().int().min(1).max(24 * 60).optional(),
   maxSources: z.number().int().min(5).max(500).optional(),
   maxHypotheses: z.number().int().min(3).max(200).optional(),
   maxModelCostUsd: z.number().min(0).max(1000).optional(),
+  skillIds: z.array(z.string()).optional(),
 });
 
 export const POST = withApiErrors(async (req: Request) => {
@@ -59,14 +59,14 @@ export const POST = withApiErrors(async (req: Request) => {
     projectId: parsed.data.projectId,
     researchGoal: parsed.data.researchGoal,
     domain: parsed.data.domain,
-    constraints: parsed.data.constraints as any,
-    sourceConfig: parsed.data.sourceConfig as any,
-    safetySensitivity: parsed.data.safetySensitivity,
+    constraints: parsed.data.constraints as Record<string, unknown>,
+    sourceConfig: parsed.data.sourceConfig as Record<string, unknown>,
     maxIterations: parsed.data.maxIterations ?? DEFAULTS.maxIterations,
     maxRuntimeMinutes: parsed.data.maxRuntimeMinutes ?? DEFAULTS.maxRuntimeMinutes,
     maxSources: parsed.data.maxSources ?? DEFAULTS.maxSources,
     maxHypotheses: parsed.data.maxHypotheses ?? DEFAULTS.maxHypotheses,
     maxModelCostUsd: parsed.data.maxModelCostUsd,
+    skillIds: parsed.data.skillIds,
   });
   return NextResponse.json({ run }, { status: 201 });
 });

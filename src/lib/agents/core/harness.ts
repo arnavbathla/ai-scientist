@@ -16,17 +16,23 @@ import {
   cancelPendingTasksForSession,
 } from "./task-ledger";
 import { verifyTask } from "./verification";
+import { subscribeControl, type ControlMessage, type ControlSubscription } from "@/lib/realtime/control";
+import { isAbortError } from "@/lib/models/anthropic";
+
+interface AgentInvocationCtx {
+  run: ResearchRun;
+  session: AgentSession;
+  task: { id: string; runId: string; sessionId: string };
+  /** Abort signal honored by every Anthropic SDK call this agent makes. */
+  signal: AbortSignal;
+}
 
 // Lazy agent imports to avoid pulling Anthropic SDK into edge bundles.
-async function runAgentByName(name: SupervisorScientistName, ctx: any) {
+async function runAgentByName(name: SupervisorScientistName, ctx: AgentInvocationCtx) {
   switch (name) {
     case "InitializerAgent": {
       const { runInitializer } = await import("@/lib/agents/scientist/initializer");
       return runInitializer(ctx);
-    }
-    case "SafetyAgent": {
-      const { runSafety } = await import("@/lib/agents/scientist/safety");
-      return runSafety(ctx);
     }
     case "LiteratureRetrievalAgent": {
       const { runLiteratureRetrieval } = await import("@/lib/agents/scientist/literature");
@@ -67,7 +73,7 @@ async function runAgentByName(name: SupervisorScientistName, ctx: any) {
   }
 }
 
-async function runAssessment(ctx: any) {
+async function runAssessment(ctx: AgentInvocationCtx) {
   const { runCompletionAssessment } = await import("@/lib/agents/scientist/completion");
   return runCompletionAssessment(ctx);
 }
@@ -82,9 +88,15 @@ export interface RunSessionOpts {
  * runSession — the durable supervisor loop.
  *
  * Invoked by the BullMQ worker for `research-runs` jobs. Keeps working until
- * the research goal is satisfied, the run is cancelled/paused, a safety block
- * fires, or a budget/runtime/iteration limit is hit (in which case it produces
- * a partial report with status `completed_with_limit`).
+ * the research goal is satisfied, the run is cancelled/paused, or a budget /
+ * runtime / iteration limit is hit (in which case it produces a partial report
+ * with status `completed_with_limit`).
+ *
+ * The harness subscribes to a Redis pubsub control channel and turns
+ * `interrupt` / `skip` signals into AbortController aborts on the in-flight
+ * agent step. Aborted steps record a `task_aborted` event and the supervisor
+ * picks the next action (a fresh user message or a `disabledAgents` flag
+ * change will steer it appropriately).
  *
  * Safe to call concurrently for the same runId thanks to the Redis lock.
  */
@@ -98,6 +110,10 @@ export async function runSession({ runId }: RunSessionOpts): Promise<void> {
   }
 
   let session: AgentSession | null = null;
+  let controlSub: ControlSubscription | null = null;
+  let currentController: AbortController | null = null;
+  const skipBox: { current: { agentName?: string } | null } = { current: null };
+
   try {
     const run = await prisma.researchRun.findUnique({ where: { id: runId } });
     if (!run) {
@@ -105,7 +121,7 @@ export async function runSession({ runId }: RunSessionOpts): Promise<void> {
       return;
     }
 
-    if (run.status === "cancelled" || run.status === "completed" || run.status === "blocked") {
+    if (run.status === "cancelled" || run.status === "completed") {
       logger.info({ runId, status: run.status }, "runSession: run already terminal");
       return;
     }
@@ -122,6 +138,22 @@ export async function runSession({ runId }: RunSessionOpts): Promise<void> {
       eventType: "session_started",
       title: session.iterationCount > 0 ? "Session resumed" : "Session started",
       message: `Run ${run.id} entered active loop.`,
+    });
+
+    // Subscribe to control channel for this run.
+    controlSub = await subscribeControl(runId, (msg: ControlMessage) => {
+      if (msg.type === "interrupt") {
+        if (currentController && !currentController.signal.aborted) {
+          currentController.abort(new DOMException("interrupt", "AbortError"));
+        }
+      } else if (msg.type === "skip") {
+        skipBox.current = { agentName: msg.agentName };
+        if (currentController && !currentController.signal.aborted) {
+          currentController.abort(new DOMException("skip", "AbortError"));
+        }
+      }
+      // user_message and config_updated need no immediate action; the next
+      // iteration will pick them up via DB reads.
     });
 
     const start = Date.now();
@@ -172,13 +204,21 @@ export async function runSession({ runId }: RunSessionOpts): Promise<void> {
           return;
         }
 
+        // Clear the skipCurrent flag if the API set it.
+        if (fresh.skipCurrent) {
+          await prisma.researchRun.update({
+            where: { id: runId },
+            data: { skipCurrent: false },
+          });
+        }
+
         // Budget gates
-        if (session.iterationCount >= run.maxIterations) {
-          await finalizeWithLimit(run.id, session.id, "max_iterations");
+        if (session.iterationCount >= fresh.maxIterations) {
+          await finalizeWithLimit(runId, session.id, "max_iterations");
           return;
         }
         if (Date.now() - start > maxRuntimeMs) {
-          await finalizeWithLimit(run.id, session.id, "max_runtime");
+          await finalizeWithLimit(runId, session.id, "max_runtime");
           return;
         }
 
@@ -189,30 +229,16 @@ export async function runSession({ runId }: RunSessionOpts): Promise<void> {
           agentName: "SupervisorAgent",
           eventType: "phase_transition",
           title: `Supervisor: ${describeAction(action)}`,
-          message: action.kind === "stop" ? action.reason : action.kind === "schedule" ? action.reason : "supervisor decision",
+          message:
+            action.kind === "stop"
+              ? action.reason
+              : action.kind === "schedule"
+                ? action.reason
+                : "supervisor decision",
           payload: action,
         });
 
         if (action.kind === "stop") {
-          if (action.status === "blocked") {
-            await prisma.researchRun.update({
-              where: { id: runId },
-              data: { status: "blocked", completedAt: new Date(), error: action.reason },
-            });
-            await prisma.agentSession.update({
-              where: { id: session.id },
-              data: { status: "blocked", completedAt: new Date() },
-            });
-            await emitEvent({
-              runId,
-              sessionId: session.id,
-              agentName: "SupervisorAgent",
-              eventType: "session_blocked",
-              title: "Run blocked by safety",
-              message: action.reason,
-            });
-            return;
-          }
           await prisma.researchRun.update({
             where: { id: runId },
             data: { status: "completed", completedAt: new Date() },
@@ -234,31 +260,72 @@ export async function runSession({ runId }: RunSessionOpts): Promise<void> {
 
         await maybeCompact(runId, session.id);
 
+        // Honor pending skip if it targets the chosen next agent.
+        if (skipBox.current) {
+          const skip = skipBox.current;
+          skipBox.current = null;
+          if (action.kind === "schedule" && (!skip.agentName || skip.agentName === action.agentName)) {
+            await emitEvent({
+              runId,
+              sessionId: session.id,
+              agentName: "SupervisorAgent",
+              eventType: "step_skipped",
+              title: `Skipped ${action.agentName}`,
+              message: `User requested skip${skip.agentName ? ` for ${skip.agentName}` : ""} (${action.phase}).`,
+              payload: { agentName: action.agentName, phase: action.phase },
+            });
+            continue;
+          }
+        }
+
+        // Build an AbortController for this step.
+        currentController = new AbortController();
+
         if (action.kind === "assess_completion") {
           await advanceIteration(session.id, "completion_assessment");
-          await runAndCommit(run, session, "CompletionAssessorAgent", "completion_assessment", action.reason, async (ctx) => {
-            return runAssessment(ctx);
-          });
+          await runAndCommit(
+            fresh,
+            session,
+            "CompletionAssessorAgent",
+            "completion_assessment",
+            action.reason,
+            currentController.signal,
+            async (ctx) => runAssessment(ctx),
+          );
           session = await refresh(session.id);
+          currentController = null;
           continue;
         }
 
         if (action.kind === "produce_final_report") {
           await advanceIteration(session.id, "final_report");
-          await runAndCommit(run, session, "MetaReviewAgent", "final_report", action.reason, async (ctx) => {
-            return runAgentByName("MetaReviewAgent", ctx);
-          });
+          await runAndCommit(
+            fresh,
+            session,
+            "MetaReviewAgent",
+            "final_report",
+            action.reason,
+            currentController.signal,
+            async (ctx) => runAgentByName("MetaReviewAgent", ctx),
+          );
           session = await refresh(session.id);
-          // After report, run post-report safety review then mark completed in next loop iteration.
+          currentController = null;
           continue;
         }
 
         // action.kind === "schedule"
         await advanceIteration(session.id, action.phase);
-        await runAndCommit(run, session, action.agentName, action.phase, action.reason, async (ctx) => {
-          return runAgentByName(action.agentName, ctx);
-        });
+        await runAndCommit(
+          fresh,
+          session,
+          action.agentName,
+          action.phase,
+          action.reason,
+          currentController.signal,
+          async (ctx) => runAgentByName(action.agentName, ctx),
+        );
         session = await refresh(session.id);
+        currentController = null;
       }
     } finally {
       clearInterval(heartbeat);
@@ -288,6 +355,13 @@ export async function runSession({ runId }: RunSessionOpts): Promise<void> {
       },
     });
   } finally {
+    if (controlSub) {
+      try {
+        await controlSub.unsubscribe();
+      } catch {
+        // ignore
+      }
+    }
     await lock.release();
   }
 }
@@ -338,19 +412,18 @@ async function refresh(sessionId: string): Promise<AgentSession> {
   return s;
 }
 
-interface AgentInvocationCtx {
-  run: ResearchRun;
-  session: AgentSession;
-  task: { id: string; runId: string; sessionId: string };
-}
-
 async function runAndCommit(
   run: ResearchRun,
   session: AgentSession,
   agentName: string,
   phase: string,
   reason: string,
-  fn: (ctx: AgentInvocationCtx) => Promise<{ output?: unknown; summary?: string; recommendations?: { kind: string; target: string; rationale: string; fromAgent: string }[] }>,
+  signal: AbortSignal,
+  fn: (ctx: AgentInvocationCtx) => Promise<{
+    output?: unknown;
+    summary?: string;
+    recommendations?: { kind: string; target: string; rationale: string; fromAgent: string }[];
+  } | void>,
 ) {
   const task = await createTask({
     runId: run.id,
@@ -376,10 +449,11 @@ async function runAndCommit(
       run,
       session,
       task: { id: task.id, runId: run.id, sessionId: session.id },
+      signal,
     });
     const verifier = await verifyTask(run.id, task.id, agentName);
     if (!verifier.passed) {
-      await failTask(task.id, verifier.reason, verifier as any);
+      await failTask(task.id, verifier.reason, verifier as unknown as Record<string, unknown>);
       await emitEvent({
         runId: run.id,
         sessionId: session.id,
@@ -399,7 +473,11 @@ async function runAndCommit(
       });
       return;
     }
-    await completeTask({ taskId: task.id, output: result?.output, verificationResult: verifier as any });
+    await completeTask({
+      taskId: task.id,
+      output: result?.output,
+      verificationResult: verifier as unknown as Record<string, unknown>,
+    });
     await emitEvent({
       runId: run.id,
       sessionId: session.id,
@@ -435,6 +513,23 @@ async function runAndCommit(
       },
     });
   } catch (err) {
+    if (isAbortError(err) || signal.aborted) {
+      // Aborted by user (interrupt or skip). This is not a failure; the
+      // supervisor will pick the next action on the next iteration.
+      const reasonStr = signal.reason instanceof Error ? signal.reason.message : (signal.reason as string | undefined) ?? "interrupted";
+      await failTask(task.id, `aborted: ${reasonStr}`);
+      await emitEvent({
+        runId: run.id,
+        sessionId: session.id,
+        taskId: task.id,
+        agentName,
+        eventType: "task_aborted",
+        title: `${agentName} aborted`,
+        message: `Step aborted by user (${reasonStr}).`,
+        payload: { reason: reasonStr },
+      });
+      return;
+    }
     const message = err instanceof Error ? err.message : String(err);
     await failTask(task.id, message);
     await emitEvent({
@@ -502,17 +597,19 @@ async function finalizeWithLimit(runId: string, sessionId: string, reason: "max_
       input: { reason, partial: true },
     });
     await startTask(task.id);
+    const ac = new AbortController();
     await runMetaReview({
       run,
       session,
       task: { id: task.id, runId, sessionId },
+      signal: ac.signal,
       partial: true,
       limitReason: reason,
     });
     await completeTask({
       taskId: task.id,
       output: { partial: true, reason },
-      verificationResult: { passed: true, reason: "partial report under budget limit" } as any,
+      verificationResult: { passed: true, reason: "partial report under budget limit" } as unknown as Record<string, unknown>,
     });
   } catch (err) {
     logger.error({ err, runId }, "partial report failed");

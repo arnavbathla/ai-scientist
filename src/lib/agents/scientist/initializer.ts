@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { ModelRouter } from "@/lib/models/router";
-import { safeGenerateJSON } from "@/lib/models/safe-json";
+import { runAgentJson } from "@/lib/agents/core/prompt";
 import { writeMemory } from "@/lib/agents/core/memory";
 import { writeCheckpoint } from "@/lib/agents/core/checkpoint";
 import { emitEvent } from "@/lib/agents/core/events";
@@ -23,10 +23,6 @@ const InitSchema = z.object({
     compounds: z.array(z.string()).optional().default([]),
     organisms: z.array(z.string()).optional().default([]),
   }),
-  safetyPlan: z.object({
-    risksToWatch: z.array(z.string()).min(1),
-    framing: z.string().min(8),
-  }),
   completionCriteria: z.array(z.string().min(4)).min(5),
 });
 
@@ -35,13 +31,15 @@ export type InitializerOutput = z.infer<typeof InitSchema>;
 export async function runInitializer(ctx: AgentInvocation): Promise<AgentExecResult<InitializerOutput>> {
   const provider = ModelRouter.for("supervisorPlanning");
   const userPrompt = buildPrompt(ctx);
-  const { data } = await safeGenerateJSON({
+  const { data } = await runAgentJson({
     provider,
     schema: InitSchema,
     systemPrompt: SYSTEM,
     userPrompt,
     maxTokens: 1800,
     temperature: 0.2,
+    signal: ctx.signal,
+    runId: ctx.run.id,
     ctx: { runId: ctx.run.id, sessionId: ctx.session.id, taskId: ctx.task.id, agentName: "InitializerAgent" },
   });
 
@@ -52,10 +50,10 @@ export async function runInitializer(ctx: AgentInvocation): Promise<AgentExecRes
       normalizedGoal: data.normalizedGoal.slice(0, 4000),
       domain: ctx.run.domain ?? data.domain,
       constraints: {
-        ...(ctx.run.constraints as object),
+        ...((ctx.run.constraints as object | null) ?? {}),
         domainEntities: data.domainEntities,
         retrievalPlan: data.retrievalPlan,
-      } as any,
+      } as unknown as import("@prisma/client").Prisma.InputJsonValue,
     },
   });
 
@@ -88,15 +86,6 @@ export async function runInitializer(ctx: AgentInvocation): Promise<AgentExecRes
   await writeMemory({
     runId: ctx.run.id,
     sessionId: ctx.session.id,
-    memoryType: "safety_note",
-    title: "Safety plan",
-    content: `Risks to watch: ${data.safetyPlan.risksToWatch.join("; ")}\nSafe framing: ${data.safetyPlan.framing}`,
-    payload: data.safetyPlan,
-    importanceScore: 0.8,
-  });
-  await writeMemory({
-    runId: ctx.run.id,
-    sessionId: ctx.session.id,
     memoryType: "decision",
     title: "Completion criteria",
     content: data.completionCriteria.map((s, i) => `${i + 1}. ${s}`).join("\n"),
@@ -108,8 +97,8 @@ export async function runInitializer(ctx: AgentInvocation): Promise<AgentExecRes
     runId: ctx.run.id,
     sessionId: ctx.session.id,
     checkpointType: "initialization",
-    summary: "Initializer wrote plan, retrieval plan, safety plan, and completion criteria.",
-    state: data as any,
+    summary: "Initializer wrote plan, retrieval plan, and completion criteria.",
+    state: data as unknown as Record<string, unknown>,
   });
   await emitEvent({
     runId: ctx.run.id,
@@ -131,8 +120,8 @@ export async function runInitializer(ctx: AgentInvocation): Promise<AgentExecRes
 const SYSTEM = `You are the ResearchOS InitializerAgent. You convert a user's free-text research goal
 into structured, durable scaffolding for a long-horizon multi-agent run.
 
-You must be specific, scientifically grounded, and conservative about safety. Do NOT produce
-operational lab procedures. Plans should be high-level research strategy, not protocols.
+You must be specific and scientifically grounded. Plans should be high-level research strategy,
+not protocols.
 
 Return strict JSON.`;
 
@@ -142,7 +131,6 @@ function buildPrompt(ctx: AgentInvocation): string {
     `User-provided domain: ${ctx.run.domain ?? "(unspecified)"}`,
     `User constraints: ${JSON.stringify(ctx.run.constraints ?? {})}`,
     `Source config: ${JSON.stringify(ctx.run.sourceConfig ?? {})}`,
-    `Safety sensitivity: ${ctx.run.safetySensitivity}`,
     "",
     "Schema:",
     `{
@@ -155,10 +143,6 @@ function buildPrompt(ctx: AgentInvocation): string {
   },
   "domainEntities": {
     "genes": [...], "proteins": [...], "diseases": [...], "pathways": [...], "compounds": [...], "organisms": [...]
-  },
-  "safetyPlan": {
-    "risksToWatch": [...],
-    "framing": "High-level safe framing of the research, no operational steps."
   },
   "completionCriteria": [
     "at least 3 distinct mechanism-grounded hypotheses ...",

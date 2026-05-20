@@ -11,14 +11,13 @@ export const GET = withApiErrors(async (_req: Request, ctx: Ctx) => {
   const userId = await requireUserId();
   const { id } = await ctx.params;
   await getRunForUser(id, userId);
-  const [evidence, safetyFlags, sources] = await Promise.all([
+  const [evidence, sources] = await Promise.all([
     prisma.evidence.findMany({
       where: { runId: id },
       orderBy: { createdAt: "desc" },
       take: 300,
       include: { source: true },
     }),
-    prisma.safetyFlag.findMany({ where: { runId: id }, orderBy: { createdAt: "desc" }, take: 60 }),
     prisma.sourceDocument.findMany({
       where: { runId: id },
       orderBy: { createdAt: "desc" },
@@ -35,5 +34,5 @@ export const GET = withApiErrors(async (_req: Request, ctx: Ctx) => {
       },
     }),
   ]);
-  return NextResponse.json({ evidence, safetyFlags, sources });
+  return NextResponse.json({ evidence, sources });
 });

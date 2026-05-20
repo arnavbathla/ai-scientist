@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db/prisma";
 import { auth } from "@/lib/auth/auth";
-import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
-import { Plus, ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, Sparkles } from "lucide-react";
+import { NewRunComposer } from "@/components/new-run-composer";
+import { listSkillsForUser } from "@/lib/skills/service";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,7 @@ export default async function DashboardPage() {
   const session = await auth();
   const userId = session!.user.id;
 
-  const [projects, runs] = await Promise.all([
+  const [projects, runs, skills] = await Promise.all([
     prisma.project.findMany({
       where: { userId },
       orderBy: { updatedAt: "desc" },
@@ -32,43 +33,32 @@ export default async function DashboardPage() {
         project: { select: { id: true, title: true } },
       },
     }),
+    listSkillsForUser(userId),
   ]);
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-6xl mx-auto px-8 py-10 space-y-10">
-        <header className="flex items-end justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              ResearchOS keeps every run, hypothesis, and source under your account. Pick a project to start a new research run.
-            </p>
-          </div>
-          <Button asChild>
-            <Link href="/projects">
-              <Plus className="h-3.5 w-3.5" /> New run
-            </Link>
-          </Button>
+      <div className="max-w-5xl mx-auto px-8 py-10 space-y-10">
+        <header>
+          <h1 className="text-2xl font-semibold tracking-tight">Research</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Start a long-horizon multi-agent run. ResearchOS plans the work, retrieves literature, generates and ranks hypotheses, and writes a final report.
+          </p>
         </header>
 
-        <section>
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-xs uppercase tracking-wider text-muted-foreground">Projects</div>
-            <Link href="/projects" className="text-xs text-muted-foreground hover:text-foreground">
-              All projects →
-            </Link>
-          </div>
-          {projects.length === 0 ? (
-            <EmptyState
-              title="No projects yet"
-              description="Create a project to organize related research runs."
-              cta={
-                <Button asChild>
-                  <Link href="/projects">Create your first project</Link>
-                </Button>
-              }
-            />
-          ) : (
+        <NewRunComposer
+          projects={JSON.parse(JSON.stringify(projects.map((p) => ({ id: p.id, title: p.title, domain: p.domain }))))}
+          skills={JSON.parse(JSON.stringify(skills.map((s) => ({ id: s.id, name: s.name, description: s.description, scope: s.scope }))))}
+        />
+
+        {projects.length > 0 && (
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">Projects</div>
+              <Link href="/projects" className="text-xs text-muted-foreground hover:text-foreground">
+                All projects →
+              </Link>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {projects.map((p) => (
                 <Link
@@ -93,18 +83,23 @@ export default async function DashboardPage() {
                 </Link>
               ))}
             </div>
-          )}
-        </section>
+          </section>
+        )}
 
         <section>
           <div className="flex items-center justify-between mb-3">
             <div className="text-xs uppercase tracking-wider text-muted-foreground">Recent runs</div>
+            <Link href="/skills" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
+              <Sparkles className="h-3 w-3" /> Manage skills →
+            </Link>
           </div>
           {runs.length === 0 ? (
-            <EmptyState
-              title="No runs yet"
-              description="Once you create a run, ResearchOS keeps running in the background even if you close this tab."
-            />
+            <div className="border border-dashed border-border rounded-md py-12 px-6 flex flex-col items-center gap-2 text-center bg-card/40">
+              <div className="text-sm font-medium tracking-tight">No runs yet</div>
+              <div className="text-xs text-muted-foreground max-w-md">
+                Describe a research goal above and press launch.
+              </div>
+            </div>
           ) : (
             <div className="border border-border rounded-md divide-y divide-border bg-card">
               {runs.map((r) => (
@@ -136,24 +131,6 @@ export default async function DashboardPage() {
           )}
         </section>
       </div>
-    </div>
-  );
-}
-
-function EmptyState({
-  title,
-  description,
-  cta,
-}: {
-  title: string;
-  description: string;
-  cta?: React.ReactNode;
-}) {
-  return (
-    <div className="border border-dashed border-border rounded-md py-12 px-6 flex flex-col items-center gap-3 text-center bg-card/40">
-      <div className="text-sm font-medium tracking-tight">{title}</div>
-      <div className="text-xs text-muted-foreground max-w-md">{description}</div>
-      {cta && <div className="mt-2">{cta}</div>}
     </div>
   );
 }

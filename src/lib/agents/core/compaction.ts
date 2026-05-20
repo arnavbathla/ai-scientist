@@ -9,8 +9,8 @@ import { emitEvent } from "./events";
  * When event/memory counts grow beyond `MAX_EVENTS_KEPT`, fold older events
  * (oldest first) into a single AgentMemory of type "progress" and create a
  * `compaction` checkpoint. This preserves identifiers (PMIDs, DOIs, hypothesis
- * IDs, ranking IDs, safety flags, task IDs) and the rationale of past actions,
- * without dragging raw chat history forward.
+ * IDs, ranking IDs, task IDs) and the rationale of past actions, without
+ * dragging raw chat history forward.
  */
 const MAX_EVENTS_KEPT = 200;
 const FOLD_BATCH = 60;
@@ -44,10 +44,6 @@ export async function maybeCompact(runId: string, sessionId: string): Promise<{ 
       select: { hypothesisId: true, rank: true, eloScore: true },
       orderBy: { rank: "asc" },
     }),
-    safetyFlags: await prisma.safetyFlag.findMany({
-      where: { runId },
-      select: { id: true, severity: true, category: true, message: true },
-    }),
   };
 
   await writeMemory({
@@ -73,7 +69,6 @@ export async function maybeCompact(runId: string, sessionId: string): Promise<{ 
         sourceCount: preserved.sourceDocuments.length,
         hypothesisCount: preserved.hypotheses.length,
         rankingCount: preserved.rankings.length,
-        safetyFlagCount: preserved.safetyFlags.length,
       },
     },
   });

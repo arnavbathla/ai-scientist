@@ -11,6 +11,7 @@ export interface SafeJsonOptions<TSchema extends ZodTypeAny> {
   temperature?: number;
   repairOnFailure?: boolean;
   maxRetries?: number;
+  signal?: AbortSignal;
   ctx?: ModelCallContext;
 }
 
@@ -56,6 +57,7 @@ export async function safeGenerateJSON<TSchema extends ZodTypeAny>(
     maxTokens: opts.maxTokens ?? 2048,
     temperature: opts.temperature ?? 0.3,
     jsonOnly: true,
+    signal: opts.signal,
   };
 
   while (attempts <= maxRetries) {
